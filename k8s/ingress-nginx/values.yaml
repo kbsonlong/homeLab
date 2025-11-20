@@ -1,0 +1,19 @@
+controller:
+  admissionWebhooks:
+    enabled: true
+  service:
+    type: NodePort
+    nodePorts:
+      http: 30080
+      https: 30443
+  metrics:
+    enabled: true
+  config:
+    use-forwarded-headers: "true"
+    enable-modsecurity: "true"
+    enable-owasp-core-rules: "true"
+    modsecurity-snippet: |
+      SecRuleEngine On
+
+defaultBackend:
+  enabled: true

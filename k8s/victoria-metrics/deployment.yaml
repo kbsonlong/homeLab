@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victoria-metrics
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victoria-metrics
+  template:
+    metadata:
+      labels:
+        app: victoria-metrics
+    spec:
+      containers:
+        - name: victoria-metrics
+          image: victoriametrics/victoria-metrics:latest
+          args:
+            - -retentionPeriod=90d
+          ports:
+            - name: http
+              containerPort: 8428
+          volumeMounts:
+            - name: data
+              mountPath: /victoria-metrics-data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pvc-victoria-metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victoria-metrics
+  namespace: monitoring
+spec:
+  selector:
+    app: victoria-metrics
+  ports:
+    - name: http
+      port: 8428
+      targetPort: 8428
