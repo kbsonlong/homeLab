@@ -262,18 +262,18 @@ func (c *Client) createIngressForHost(ctx context.Context, host string, policy m
 		},
 	}
 	
-	// Apply WAF policy to the new ingress
-	if err := c.applyPolicyToIngress(ctx, ingress, policy); err != nil {
-		return fmt.Errorf("failed to apply policy to new ingress: %w", err)
-	}
-	
-	// Create the ingress
-	_, err = c.clientset.NetworkingV1().Ingresses(ingress.Namespace).Create(ctx, ingress, metav1.CreateOptions{})
+	// Create the ingress first
+	createdIngress, err := c.clientset.NetworkingV1().Ingresses(ingress.Namespace).Create(ctx, ingress, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create ingress for host %s: %w", host, err)
 	}
 	
-	logrus.Infof("Successfully created ingress %s for host %s with WAF policy", ingress.Name, host)
+	// Now apply WAF policy to the created ingress
+	if err := c.applyPolicyToIngress(ctx, createdIngress, policy); err != nil {
+		return fmt.Errorf("failed to apply policy to new ingress: %w", err)
+	}
+	
+	logrus.Infof("Successfully created ingress %s for host %s with WAF policy", createdIngress.Name, host)
 	return nil
 }
 
