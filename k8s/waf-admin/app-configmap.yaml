@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waf-admin-app
+  namespace: monitoring
+data:
+  server.js: |
+    const http = require('http');
+    const https = require('https');
+    const fs = require('fs');
+    const url = require('url');
+
+    const PORT = process.env.PORT || 8081;
+    const K8S_HOST = process.env.K8S_HOST || 'https://kubernetes.default.svc';
+    const SA_TOKEN_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/token';
+    const SA_CA_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt';
+    const NAMESPACE = process.env.NAMESPACE || 'monitoring';
+    const INGRESS_NS = process.env.INGRESS_NS || 'ingress-nginx';
+    const INGRESS_CM = process.env.INGRESS_CM || 'ingress-nginx-controller';
+    const VM_URL = process.env.VM_URL || 'http://victoria-metrics.monitoring.svc:8428';
+    const VL_URL = process.env.VL_URL || 'http://victoria-logs.monitoring.svc:9428';
+    const VMALERT_URL = process.env.VMALERT_URL || 'http://vmalert.monitoring.svc:8880';
+
+    const token = fs.existsSync(SA_TOKEN_PATH) ? fs.readFileSync(SA_TOKEN_PATH, 'utf8') : '';
+    const ca = fs.existsSync(SA_CA_PATH) ? fs.readFileSync(SA_CA_PATH) : undefined;
+
+    function k8sRequest(path, method = 'GET', body = null) {
+      return new Promise((resolve, reject) => {
+        const opts = {
+          method,
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json',
+          },
+        };
+        if (body) {
+          const data = JSON.stringify(body);
+          opts.headers['Content-Type'] = 'application/json';
+          opts.headers['Content-Length'] = Buffer.byteLength(data);
+        }
+        const req = https.request(K8S_HOST + path, { ...opts, ca }, (res) => {
+          let chunks = '';
+          res.on('data', (d) => chunks += d);
+          res.on('end', () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              try { resolve(chunks ? JSON.parse(chunks) : {}); } catch (e) { resolve({ raw: chunks }); }
+            } else {
+              reject(new Error(`k8s ${method} ${path} ${res.statusCode}: ${chunks}`));
+            }
+          });
+        });
+        req.on('error', reject);
+        if (body) req.write(JSON.stringify(body));
+        req.end();
+      });
+    }
+
+    async function getConfigMap(ns, name) {
+      return k8sRequest(`/api/v1/namespaces/${ns}/configmaps/${name}`);
+    }
+    async function patchConfigMap(ns, name, dataPatch) {
+      // Use JSON Patch
+      const ops = Object.entries(dataPatch).map(([k,v]) => ({ op: 'replace', path: `/data/${k}`, value: v }));
+      return new Promise((resolve, reject) => {
+        const body = JSON.stringify(ops);
+        const opts = {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json-patch+json',
+            'Content-Length': Buffer.byteLength(body)
+          },
+          ca
+        };
+        const req = https.request(`${K8S_HOST}/api/v1/namespaces/${ns}/configmaps/${name}`, opts, (res) => {
+          let chunks = '';
+          res.on('data', (d) => chunks += d);
+          res.on('end', () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              try { resolve(chunks ? JSON.parse(chunks) : {}); } catch (e) { resolve({ raw: chunks }); }
+            } else {
+              reject(new Error(`k8s PATCH /api/v1/namespaces/${ns}/configmaps/${name} ${res.statusCode}: ${chunks}`));
+            }
+          });
+        });
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+      });
+    }
+    async function upsertPolicies(policies) {
+      const name = 'waf-policies';
+      try {
+        await k8sRequest(`/api/v1/namespaces/${NAMESPACE}/configmaps/${name}`, 'PUT', {
+          apiVersion: 'v1', kind: 'ConfigMap', metadata: { name }, data: { policies: JSON.stringify(policies) }
+        });
+      } catch (e) {
+        // Fallback to create
+        await k8sRequest(`/api/v1/namespaces/${NAMESPACE}/configmaps`, 'POST', {
+          apiVersion: 'v1', kind: 'ConfigMap', metadata: { name }, data: { policies: JSON.stringify(policies) }
+        });
+      }
+      return policies;
+    }
+    async function readPolicies() {
+      try {
+        const cm = await getConfigMap(NAMESPACE, 'waf-policies');
+        return JSON.parse(cm.data?.policies || '{}');
+      } catch {
+        return {};
+      }
+    }
+    function renderModSecSnippet(policies) {
+      // Build per-host ruleEngine ctl, default On
+      const lines = [
+        'SecRuleEngine On'
+      ];
+      const hosts = Object.keys(policies || {});
+      let id = 20000;
+      hosts.forEach(h => {
+        const mode = (policies[h]?.mode || 'On');
+        const ctl = mode === 'On' ? 'On' : mode === 'DetectionOnly' ? 'DetectionOnly' : 'Off';
+        const safeHost = h.replace(/\./g, '\\.');
+        lines.push(`SecRule REQUEST_HEADERS:Host "@rx ^${safeHost}$" "id:${id++},phase:1,ctl:ruleEngine=${ctl},pass"`);
+      });
+      return lines.join('\n');
+    }
+
+    async function applyPolicies() {
+      const policies = await readPolicies();
+      const snippet = renderModSecSnippet(policies);
+      await patchConfigMap(INGRESS_NS, INGRESS_CM, { 'modsecurity-snippet': snippet, 'enable-modsecurity': 'true', 'enable-owasp-core-rules': 'true' });
+      return { applied: true, snippet };
+    }
+
+    function respond(res, code, obj) {
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(obj));
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const parsed = url.parse(req.url, true);
+      if (req.method === 'GET' && parsed.pathname === '/api/waf/status') {
+        try {
+          const policies = await readPolicies();
+          const cm = await getConfigMap(INGRESS_NS, INGRESS_CM);
+          respond(res, 200, { policies, controllerConfig: cm.data || {} });
+        } catch (e) { respond(res, 500, { error: e.message }); }
+        return;
+      }
+      if (req.method === 'POST' && parsed.pathname === '/api/waf/mode') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+          try {
+            const data = JSON.parse(body || '{}');
+            const { host, mode } = data;
+            const policies = await readPolicies();
+            policies[host] = { ...(policies[host] || {}), mode };
+            await upsertPolicies(policies);
+            respond(res, 200, { ok: true });
+          } catch (e) { respond(res, 400, { error: e.message }); }
+        });
+        return;
+      }
+      if (req.method === 'POST' && parsed.pathname === '/api/waf/apply') {
+        try {
+          const result = await applyPolicies();
+          respond(res, 200, result);
+        } catch (e) { respond(res, 500, { error: e.message }); }
+        return;
+      }
+      if (req.method === 'GET' && parsed.pathname === '/api/metrics/summary') {
+        // Simple example: 403 ratio over 5m
+        const q = 'sum(rate(nginx_ingress_controller_requests{status="403"}[5m]))/sum(rate(nginx_ingress_controller_requests[5m]))';
+        http.get(`${VM_URL}/api/v1/query?query=${encodeURIComponent(q)}`, r => {
+          let chunks=''; r.on('data',d=>chunks+=d); r.on('end',()=>respond(res,200,{raw:chunks}));
+        }).on('error', e => respond(res, 500, { error: e.message }));
+        return;
+      }
+      if (req.method === 'POST' && parsed.pathname === '/api/logs/search') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', () => {
+          const params = new url.URLSearchParams(body);
+          const q = params.get('query') || '_msg:*';
+          const post = http.request(`${VL_URL}/select/logsql/query`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, r => {
+            let chunks=''; r.on('data',d=>chunks+=d); r.on('end',()=>respond(res,200,{raw:chunks}));
+          });
+          post.write(`query=${encodeURIComponent(q)}`);
+          post.end();
+        });
+        return;
+      }
+      if (req.method === 'GET' && parsed.pathname === '/api/alerts') {
+        http.get(`${VMALERT_URL}/api/v1/rules`, r => { let c=''; r.on('data',d=>c+=d); r.on('end',()=>respond(res,200,{raw:c})); }).on('error', e => respond(res, 500, { error: e.message }));
+        return;
+      }
+      respond(res, 404, { error: 'not found' });
+    });
+
+    server.listen(PORT, () => console.log(`waf-admin listening on ${PORT}`));

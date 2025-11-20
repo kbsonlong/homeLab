@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf-admin
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: waf-admin
+  template:
+    metadata:
+      labels:
+        app: waf-admin
+    spec:
+      serviceAccountName: waf-admin-sa
+      containers:
+        - name: waf-admin
+          image: node:20-alpine
+          command: ["node","/app/server.js"]
+          env:
+            - name: NAMESPACE
+              value: monitoring
+            - name: INGRESS_NS
+              value: ingress-nginx
+            - name: INGRESS_CM
+              value: ingress-nginx-controller
+            - name: VM_URL
+              value: http://victoria-metrics.monitoring.svc:8428
+            - name: VL_URL
+              value: http://victoria-logs.monitoring.svc:9428
+            - name: VMALERT_URL
+              value: http://vmalert.monitoring.svc:8880
+            - name: PORT
+              value: "8081"
+          ports:
+            - containerPort: 8081
+              name: http
+          volumeMounts:
+            - name: app
+              mountPath: /app
+      volumes:
+        - name: app
+          configMap:
+            name: waf-admin-app
+            items:
+              - key: server.js
+                path: server.js
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waf-admin
+  namespace: monitoring
+spec:
+  selector:
+    app: waf-admin
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: waf-admin
+  namespace: monitoring
+  annotations:
+    nginx.ingress.kubernetes.io/enable-modsecurity: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: waf.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: waf-admin
+                port:
+                  number: 8081
