@@ -43,7 +43,7 @@ func main() {
 
 	// Initialize services
 	wafService := services.NewWAFService(k8sClient, cfg, logger)
-	auditService := services.NewAuditService(k8sClient, cfg, logger)
+	auditService := services.NewAuditService(cfg, logger)
 	metricsService := services.NewMetricsService(cfg, logger)
 	logsService := services.NewLogsService(cfg, logger)
 
