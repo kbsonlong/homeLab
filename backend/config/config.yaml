@@ -7,6 +7,15 @@ kubernetes:
   namespace: "default"
   config_path: "/Users/zengshenglong/.kube/config"
   in_cluster: false
+  ingress_controller_namespace: "ingress-nginx"
+  ingress_controller_configmap_name: "ingress-nginx-controller"
+  ingress_controller_deployment_name: "ingress-nginx-controller"
+  waf_policies_configmap_name: "waf-policies"
+  default_ingress_namespace: "default"
+  default_backend_services:
+    - "echo-server"
+    - "ingress-nginx-defaultbackend"
+  default_apply_strategy: "annotation"
 
 metrics:
   enabled: true

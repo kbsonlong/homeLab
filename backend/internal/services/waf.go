@@ -44,17 +44,17 @@ func (s *WAFService) GetWAFStatus(ctx context.Context) (*models.WAFStatus, error
 		LastUpdated:  time.Now(),
 	}
 
-	if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
-		var policies map[string]models.WAFPolicy
-		if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
-			s.logger.Warnf("Failed to unmarshal policies: %v", err)
-		} else {
-			status.HostPolicies = policies
-			if globalPolicy, exists := policies["global"]; exists {
-				status.GlobalPolicy = globalPolicy
-			}
-		}
-	}
+    if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
+        var policies map[string]models.WAFPolicy
+        if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
+            s.logger.Warnf("Failed to unmarshal policies: %v", err)
+        } else {
+            status.HostPolicies = policies
+            if globalPolicy, exists := policies["global"]; exists {
+                status.GlobalPolicy = globalPolicy
+            }
+        }
+    }
 
 	controllerConfigMap, err := s.k8sClient.GetIngressNGINXControllerConfigMap(ctx)
 	if err == nil {
@@ -73,57 +73,63 @@ func (s *WAFService) UpdateWAFMode(ctx context.Context, req models.PolicyUpdateR
 		return fmt.Errorf("failed to get WAF policy configmap: %w", err)
 	}
 
-	var policies map[string]models.WAFPolicy
-	if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
-		if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
-			return fmt.Errorf("failed to unmarshal policies: %w", err)
-		}
-	} else {
-		policies = make(map[string]models.WAFPolicy)
-	}
+    var policies map[string]models.WAFPolicy
+    if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
+        if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
+            return fmt.Errorf("failed to unmarshal policies: %w", err)
+        }
+    } else {
+        policies = make(map[string]models.WAFPolicy)
+    }
+    ns := req.Namespace
+    if ns == "" { ns = s.config.Kubernetes.DefaultIngressNamespace }
+    key := fmt.Sprintf("%s/%s", ns, req.Host)
+    policy, exists := policies[key]
+    if !exists {
+        policy = models.WAFPolicy{
+            ID:        uuid.New().String(),
+            Host:      req.Host,
+            Namespace: ns,
+            CreatedAt: time.Now(),
+        }
+    }
 
-	policy, exists := policies[req.Host]
-	if !exists {
-		policy = models.WAFPolicy{
-			ID:        uuid.New().String(),
-			Host:      req.Host,
-			CreatedAt: time.Now(),
-		}
-	}
-
-	policy.Mode = req.Mode
-	policy.UpdatedAt = time.Now()
-	policy.Version++
+    policy.Mode = req.Mode
+    policy.UpdatedAt = time.Now()
+    policy.Version++
+    if req.Namespace != "" {
+        policy.Namespace = req.Namespace
+    }
 
 	if req.EnableCRS != nil {
 		policy.EnableCRS = *req.EnableCRS
 	}
 
-	policies[req.Host] = policy
+    policies[key] = policy
 
-	policiesData, err := yaml.Marshal(policies)
+    policiesData, err := yaml.Marshal(policies)
 	if err != nil {
 		return fmt.Errorf("failed to marshal policies: %w", err)
 	}
 
 	configMap.Data["policies.yaml"] = string(policiesData)
 
-	if err := s.k8sClient.UpdateConfigMap(ctx, s.config.Kubernetes.Namespace, configMap); err != nil {
-		return fmt.Errorf("failed to update configmap: %w", err)
-	}
+    if err := s.k8sClient.UpdateConfigMap(ctx, s.config.Kubernetes.Namespace, configMap); err != nil {
+        return fmt.Errorf("failed to update configmap: %w", err)
+    }
 
 	// Log the change
 	if s.auditService != nil {
 		auditLog := s.auditService.CreateAuditLog(
 			"UPDATE_MODE",
 			"waf_policy",
-			req.Host,
-			"system",
-			"",
-			"",
-			policy,
-			policy,
-		)
+            key,
+            "system",
+            "",
+            "",
+            policy,
+            policy,
+        )
 		if err := s.auditService.LogChange(ctx, auditLog); err != nil {
 			s.logger.Warnf("Failed to log audit change: %v", err)
 		}
@@ -138,29 +144,35 @@ func (s *WAFService) UpdateExceptions(ctx context.Context, req models.ExceptionU
 		return fmt.Errorf("failed to get WAF policy configmap: %w", err)
 	}
 
-	var policies map[string]models.WAFPolicy
-	if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
-		if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
-			return fmt.Errorf("failed to unmarshal policies: %w", err)
-		}
-	} else {
-		policies = make(map[string]models.WAFPolicy)
-	}
+    var policies map[string]models.WAFPolicy
+    if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
+        if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
+            return fmt.Errorf("failed to unmarshal policies: %w", err)
+        }
+    } else {
+        policies = make(map[string]models.WAFPolicy)
+    }
+    ns := req.Namespace
+    if ns == "" { ns = s.config.Kubernetes.DefaultIngressNamespace }
+    key := fmt.Sprintf("%s/%s", ns, req.Host)
+    policy, exists := policies[key]
+    if !exists {
+        policy = models.WAFPolicy{
+            ID:        uuid.New().String(),
+            Host:      req.Host,
+            Namespace: ns,
+            CreatedAt: time.Now(),
+        }
+    }
 
-	policy, exists := policies[req.Host]
-	if !exists {
-		policy = models.WAFPolicy{
-			ID:        uuid.New().String(),
-			Host:      req.Host,
-			CreatedAt: time.Now(),
-		}
-	}
+    policy.Exceptions = req.Exceptions
+    policy.UpdatedAt = time.Now()
+    policy.Version++
+    if req.Namespace != "" {
+        policy.Namespace = req.Namespace
+    }
 
-	policy.Exceptions = req.Exceptions
-	policy.UpdatedAt = time.Now()
-	policy.Version++
-
-	policies[req.Host] = policy
+    policies[key] = policy
 
 	policiesData, err := yaml.Marshal(policies)
 	if err != nil {
@@ -173,24 +185,24 @@ func (s *WAFService) UpdateExceptions(ctx context.Context, req models.ExceptionU
 		return fmt.Errorf("failed to update configmap: %w", err)
 	}
 
-	if !req.TestMode {
-		if err := s.applyPolicy(ctx, req.Host, policy); err != nil {
-			return err
-		}
-	}
+    if !req.TestMode {
+        if err := s.applyPolicy(ctx, ns, req.Host, policy); err != nil {
+            return err
+        }
+    }
 
 	// Log the change
 	if s.auditService != nil {
 		auditLog := s.auditService.CreateAuditLog(
 			"UPDATE_EXCEPTIONS",
 			"waf_policy",
-			req.Host,
-			"system",
-			"",
-			"",
-			policy,
-			policy,
-		)
+            key,
+            "system",
+            "",
+            "",
+            policy,
+            policy,
+        )
 		if err := s.auditService.LogChange(ctx, auditLog); err != nil {
 			s.logger.Warnf("Failed to log audit change: %v", err)
 		}
@@ -205,29 +217,35 @@ func (s *WAFService) UpdateRules(ctx context.Context, req models.RuleUpdateReque
 		return fmt.Errorf("failed to get WAF policy configmap: %w", err)
 	}
 
-	var policies map[string]models.WAFPolicy
-	if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
-		if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
-			return fmt.Errorf("failed to unmarshal policies: %w", err)
-		}
-	} else {
-		policies = make(map[string]models.WAFPolicy)
-	}
+    var policies map[string]models.WAFPolicy
+    if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
+        if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
+            return fmt.Errorf("failed to unmarshal policies: %w", err)
+        }
+    } else {
+        policies = make(map[string]models.WAFPolicy)
+    }
+    ns := req.Namespace
+    if ns == "" { ns = s.config.Kubernetes.DefaultIngressNamespace }
+    key := fmt.Sprintf("%s/%s", ns, req.Host)
+    policy, exists := policies[key]
+    if !exists {
+        policy = models.WAFPolicy{
+            ID:        uuid.New().String(),
+            Host:      req.Host,
+            Namespace: ns,
+            CreatedAt: time.Now(),
+        }
+    }
 
-	policy, exists := policies[req.Host]
-	if !exists {
-		policy = models.WAFPolicy{
-			ID:        uuid.New().String(),
-			Host:      req.Host,
-			CreatedAt: time.Now(),
-		}
-	}
+    policy.CustomRules = req.CustomRules
+    policy.UpdatedAt = time.Now()
+    policy.Version++
+    if req.Namespace != "" {
+        policy.Namespace = req.Namespace
+    }
 
-	policy.CustomRules = req.CustomRules
-	policy.UpdatedAt = time.Now()
-	policy.Version++
-
-	policies[req.Host] = policy
+    policies[key] = policy
 
 	policiesData, err := yaml.Marshal(policies)
 	if err != nil {
@@ -240,22 +258,22 @@ func (s *WAFService) UpdateRules(ctx context.Context, req models.RuleUpdateReque
 		return fmt.Errorf("failed to update configmap: %w", err)
 	}
 
-	if err := s.applyPolicy(ctx, req.Host, policy); err != nil {
-		return err
-	}
+    if err := s.applyPolicy(ctx, ns, req.Host, policy); err != nil {
+        return err
+    }
 
 	// Log the change
 	if s.auditService != nil {
 		auditLog := s.auditService.CreateAuditLog(
 			"UPDATE_RULES",
 			"waf_policy",
-			req.Host,
-			"system",
-			"",
-			"",
-			policy,
-			policy,
-		)
+            key,
+            "system",
+            "",
+            "",
+            policy,
+            policy,
+        )
 		if err := s.auditService.LogChange(ctx, auditLog); err != nil {
 			s.logger.Warnf("Failed to log audit change: %v", err)
 		}
@@ -270,46 +288,48 @@ func (s *WAFService) ApplyConfiguration(ctx context.Context, req models.ApplyReq
 		return fmt.Errorf("failed to get WAF policy configmap: %w", err)
 	}
 
-	var policies map[string]models.WAFPolicy
-	if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
-		if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
-			return fmt.Errorf("failed to unmarshal policies: %w", err)
-		}
-	} else {
-		return fmt.Errorf("no policies found for host: %s", req.Host)
-	}
+    var policies map[string]models.WAFPolicy
+    if policiesData, exists := configMap.Data["policies.yaml"]; exists && policiesData != "{}" {
+        if err := yaml.Unmarshal([]byte(policiesData), &policies); err != nil {
+            return fmt.Errorf("failed to unmarshal policies: %w", err)
+        }
+    } else {
+        return fmt.Errorf("no policies found for host: %s", req.Host)
+    }
+    ns := req.Namespace
+    if ns == "" { ns = s.config.Kubernetes.DefaultIngressNamespace }
+    key := fmt.Sprintf("%s/%s", ns, req.Host)
+    policy, exists := policies[key]
+    if !exists {
+        return fmt.Errorf("no policy found for host: %s in namespace: %s", req.Host, ns)
+    }
 
-	policy, exists := policies[req.Host]
-	if !exists {
-		return fmt.Errorf("no policy found for host: %s", req.Host)
-	}
+    if req.Strategy == "annotation" {
+        if err := s.k8sClient.ApplyWAFPolicyToIngress(ctx, ns, req.Host, policy); err != nil {
+            return fmt.Errorf("failed to apply policy to ingress: %w", err)
+        }
+    } else {
+        if err := s.k8sClient.ApplyWAFPolicyToController(ctx, policy); err != nil {
+            return fmt.Errorf("failed to apply policy to controller: %w", err)
+        }
+    }
 
-	if req.Strategy == "annotation" {
-		if err := s.k8sClient.ApplyWAFPolicyToIngress(ctx, req.Host, policy); err != nil {
-			return fmt.Errorf("failed to apply policy to ingress: %w", err)
-		}
-	} else {
-		if err := s.k8sClient.ApplyWAFPolicyToController(ctx, policy); err != nil {
-			return fmt.Errorf("failed to apply policy to controller: %w", err)
-		}
-	}
-
-	if err := s.k8sClient.RolloutDeployment(ctx, "ingress-nginx", "ingress-nginx-controller"); err != nil {
-		return err
-	}
+    if err := s.k8sClient.RolloutDeployment(ctx, s.config.Kubernetes.IngressControllerNamespace, s.config.Kubernetes.IngressControllerDeploymentName); err != nil {
+        return err
+    }
 
 	// Log the change
 	if s.auditService != nil {
 		auditLog := s.auditService.CreateAuditLog(
 			"APPLY_CONFIGURATION",
 			"waf_policy",
-			req.Host,
-			"system",
-			req.Strategy,
-			"",
-			policy,
-			policy,
-		)
+            key,
+            "system",
+            req.Strategy,
+            "",
+            policy,
+            policy,
+        )
 		if err := s.auditService.LogChange(ctx, auditLog); err != nil {
 			s.logger.Warnf("Failed to log audit change: %v", err)
 		}
@@ -318,9 +338,9 @@ func (s *WAFService) ApplyConfiguration(ctx context.Context, req models.ApplyReq
 	return nil
 }
 
-func (s *WAFService) applyPolicy(ctx context.Context, host string, policy models.WAFPolicy) error {
-	if s.config.Kubernetes.Namespace == "ingress-nginx" {
-		return s.k8sClient.ApplyWAFPolicyToController(ctx, policy)
-	}
-	return s.k8sClient.ApplyWAFPolicyToIngress(ctx, host, policy)
+func (s *WAFService) applyPolicy(ctx context.Context, namespace string, host string, policy models.WAFPolicy) error {
+    if s.config.Kubernetes.DefaultApplyStrategy == "configmap" {
+        return s.k8sClient.ApplyWAFPolicyToController(ctx, policy)
+    }
+    return s.k8sClient.ApplyWAFPolicyToIngress(ctx, namespace, host, policy)
 }

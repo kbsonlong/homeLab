@@ -22,9 +22,16 @@ type ServerConfig struct {
 }
 
 type K8sConfig struct {
-	ConfigPath     string `mapstructure:"config_path"`
-	Namespace      string `mapstructure:"namespace"`
-	ServiceAccount string `mapstructure:"service_account"`
+    ConfigPath     string `mapstructure:"config_path"`
+    Namespace      string `mapstructure:"namespace"`
+    ServiceAccount string `mapstructure:"service_account"`
+    IngressControllerNamespace string `mapstructure:"ingress_controller_namespace"`
+    IngressControllerConfigMapName string `mapstructure:"ingress_controller_configmap_name"`
+    IngressControllerDeploymentName string `mapstructure:"ingress_controller_deployment_name"`
+    WAFPoliciesConfigMapName string `mapstructure:"waf_policies_configmap_name"`
+    DefaultIngressNamespace string `mapstructure:"default_ingress_namespace"`
+    DefaultBackendServices []string `mapstructure:"default_backend_services"`
+    DefaultApplyStrategy string `mapstructure:"default_apply_strategy"`
 }
 
 type MetricsConfig struct {
@@ -54,8 +61,15 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.mode", "release")
-	viper.SetDefault("server.allow_origins", []string{"*"})
-	viper.SetDefault("kubernetes.namespace", "monitoring")
+    viper.SetDefault("server.allow_origins", []string{"*"})
+    viper.SetDefault("kubernetes.namespace", "monitoring")
+    viper.SetDefault("kubernetes.ingress_controller_namespace", "ingress-nginx")
+    viper.SetDefault("kubernetes.ingress_controller_configmap_name", "ingress-nginx-controller")
+    viper.SetDefault("kubernetes.ingress_controller_deployment_name", "ingress-nginx-controller")
+    viper.SetDefault("kubernetes.waf_policies_configmap_name", "waf-policies")
+    viper.SetDefault("kubernetes.default_ingress_namespace", "default")
+    viper.SetDefault("kubernetes.default_backend_services", []string{"echo-server", "ingress-nginx-defaultbackend"})
+    viper.SetDefault("kubernetes.default_apply_strategy", "annotation")
 	viper.SetDefault("metrics.victoria_metrics_url", "http://victoria-metrics:8428")
 	viper.SetDefault("metrics.vmalert_url", "http://vmalert:8880")
 	viper.SetDefault("logs.victoria_logs_url", "http://victoria-logs:9428")

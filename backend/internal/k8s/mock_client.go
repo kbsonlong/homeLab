@@ -46,30 +46,30 @@ func NewMockClient(cfg *config.Config, logger *logrus.Logger) *MockClient {
 }
 
 func (c *MockClient) initializeMockData() {
-	// Create mock WAF policy ConfigMap
-	wafPolicyCM := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "waf-policies",
-			Namespace: c.config.Kubernetes.Namespace,
-		},
-		Data: map[string]string{
-			"policies.yaml": "{}",
-		},
-	}
-	c.configMaps["waf-policies"] = wafPolicyCM
-	
-	// Create mock ingress-nginx controller ConfigMap
-	controllerCM := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingress-nginx-controller",
-			Namespace: "ingress-nginx",
-		},
-		Data: map[string]string{
-			"allow-snippet-annotations": "true",
-			"modsecurity-snippet":       "",
-		},
-	}
-	c.configMaps["ingress-nginx-controller"] = controllerCM
+    // Create mock WAF policy ConfigMap
+    wafPolicyCM := &corev1.ConfigMap{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:      c.config.Kubernetes.WAFPoliciesConfigMapName,
+            Namespace: c.config.Kubernetes.Namespace,
+        },
+        Data: map[string]string{
+            "policies.yaml": "{}",
+        },
+    }
+    c.configMaps[c.config.Kubernetes.WAFPoliciesConfigMapName] = wafPolicyCM
+    
+    // Create mock ingress-nginx controller ConfigMap
+    controllerCM := &corev1.ConfigMap{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:      c.config.Kubernetes.IngressControllerConfigMapName,
+            Namespace: c.config.Kubernetes.IngressControllerNamespace,
+        },
+        Data: map[string]string{
+            "allow-snippet-annotations": "true",
+            "modsecurity-snippet":       "",
+        },
+    }
+    c.configMaps[c.config.Kubernetes.IngressControllerConfigMapName] = controllerCM
 	
 	// Create mock audit ConfigMap
 	auditCM := &corev1.ConfigMap{
@@ -88,22 +88,22 @@ func (c *MockClient) GetWAFPolicyConfigMap(ctx context.Context) (*corev1.ConfigM
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 	
-	cm, exists := c.configMaps["waf-policies"]
-	if !exists {
-		return nil, fmt.Errorf("configmap waf-policies not found")
-	}
-	return cm, nil
+    cm, exists := c.configMaps[c.config.Kubernetes.WAFPoliciesConfigMapName]
+    if !exists {
+        return nil, fmt.Errorf("configmap %s not found", c.config.Kubernetes.WAFPoliciesConfigMapName)
+    }
+    return cm, nil
 }
 
 func (c *MockClient) GetIngressNGINXControllerConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 	
-	cm, exists := c.configMaps["ingress-nginx-controller"]
-	if !exists {
-		return nil, fmt.Errorf("configmap ingress-nginx-controller not found")
-	}
-	return cm, nil
+    cm, exists := c.configMaps[c.config.Kubernetes.IngressControllerConfigMapName]
+    if !exists {
+        return nil, fmt.Errorf("configmap %s not found", c.config.Kubernetes.IngressControllerConfigMapName)
+    }
+    return cm, nil
 }
 
 func (c *MockClient) UpdateConfigMap(ctx context.Context, namespace string, configMap *corev1.ConfigMap) error {
@@ -144,17 +144,20 @@ func (c *MockClient) UpdateIngress(ctx context.Context, namespace string, ingres
 	return nil
 }
 
-func (c *MockClient) ApplyWAFPolicyToIngress(ctx context.Context, host string, policy models.WAFPolicy) error {
+func (c *MockClient) ApplyWAFPolicyToIngress(ctx context.Context, namespace string, host string, policy models.WAFPolicy) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	
 	// Find ingress by host
-	for _, ingress := range c.ingresses {
-		for _, rule := range ingress.Spec.Rules {
-			if rule.Host == host {
-				if ingress.Annotations == nil {
-					ingress.Annotations = make(map[string]string)
-				}
+    for _, ingress := range c.ingresses {
+        if ingress.Namespace != namespace {
+            continue
+        }
+        for _, rule := range ingress.Spec.Rules {
+            if rule.Host == host {
+                if ingress.Annotations == nil {
+                    ingress.Annotations = make(map[string]string)
+                }
 				
 				// Apply WAF annotations based on policy
 				if policy.Mode == "On" {
@@ -170,23 +173,23 @@ func (c *MockClient) ApplyWAFPolicyToIngress(ctx context.Context, host string, p
 					delete(ingress.Annotations, "nginx.ingress.kubernetes.io/modsecurity-snippet")
 				}
 				
-				c.logger.Infof("Applied WAF policy to ingress %s for host %s", ingress.Name, host)
-				return nil
-			}
-		}
-	}
+                c.logger.Infof("Applied WAF policy to ingress %s in namespace %s for host %s", ingress.Name, namespace, host)
+                return nil
+            }
+        }
+    }
 	
-	return fmt.Errorf("no ingress found for host %s", host)
+    return fmt.Errorf("no ingress found for host %s in namespace %s", host, namespace)
 }
 
 func (c *MockClient) ApplyWAFPolicyToController(ctx context.Context, policy models.WAFPolicy) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	
-	controllerCM, exists := c.configMaps["ingress-nginx-controller"]
-	if !exists {
-		return fmt.Errorf("controller configmap not found")
-	}
+    controllerCM, exists := c.configMaps[c.config.Kubernetes.IngressControllerConfigMapName]
+    if !exists {
+        return fmt.Errorf("controller configmap not found")
+    }
 	
 	if controllerCM.Data == nil {
 		controllerCM.Data = make(map[string]string)
@@ -196,8 +199,8 @@ func (c *MockClient) ApplyWAFPolicyToController(ctx context.Context, policy mode
 	snippet := c.generateModSecuritySnippet(policy)
 	controllerCM.Data["modsecurity-snippet"] = snippet
 	
-	c.logger.Infof("Applied WAF policy to ingress-nginx controller")
-	return nil
+    c.logger.Infof("Applied WAF policy to %s controller", c.config.Kubernetes.IngressControllerNamespace)
+    return nil
 }
 
 func (c *MockClient) generateModSecuritySnippet(policy models.WAFPolicy) string {

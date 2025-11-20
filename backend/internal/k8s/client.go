@@ -109,7 +109,7 @@ func (c *Client) RolloutDeployment(ctx context.Context, namespace, name string) 
 }
 
 func (c *Client) GetWAFPolicyConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
-	configMap, err := c.GetConfigMap(ctx, c.config.Kubernetes.Namespace, "waf-policies")
+    configMap, err := c.GetConfigMap(ctx, c.config.Kubernetes.Namespace, c.config.Kubernetes.WAFPoliciesConfigMapName)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return c.createWAFPolicyConfigMap(ctx)
@@ -120,28 +120,28 @@ func (c *Client) GetWAFPolicyConfigMap(ctx context.Context) (*corev1.ConfigMap, 
 }
 
 func (c *Client) createWAFPolicyConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "waf-policies",
-			Namespace: c.config.Kubernetes.Namespace,
-			Labels: map[string]string{
-				"app": "waf-admin",
-			},
-		},
-		Data: map[string]string{
-			"policies.yaml": "{}",
-		},
-	}
+    configMap := &corev1.ConfigMap{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:      c.config.Kubernetes.WAFPoliciesConfigMapName,
+            Namespace: c.config.Kubernetes.Namespace,
+            Labels: map[string]string{
+                "app": "waf-admin",
+            },
+        },
+        Data: map[string]string{
+            "policies.yaml": "{}",
+        },
+    }
 
 	return c.clientset.CoreV1().ConfigMaps(c.config.Kubernetes.Namespace).Create(ctx, configMap, metav1.CreateOptions{})
 }
 
 func (c *Client) GetIngressNGINXControllerConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
-	return c.GetConfigMap(ctx, "ingress-nginx", "ingress-nginx-controller")
+    return c.GetConfigMap(ctx, c.config.Kubernetes.IngressControllerNamespace, c.config.Kubernetes.IngressControllerConfigMapName)
 }
 
-func (c *Client) ApplyWAFPolicyToIngress(ctx context.Context, host string, policy models.WAFPolicy) error {
-	ingressList, err := c.clientset.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
+func (c *Client) ApplyWAFPolicyToIngress(ctx context.Context, namespace string, host string, policy models.WAFPolicy) error {
+    ingressList, err := c.clientset.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list ingresses: %w", err)
 	}
@@ -150,13 +150,13 @@ func (c *Client) ApplyWAFPolicyToIngress(ctx context.Context, host string, polic
 	for _, ingress := range ingressList.Items {
 		for _, rule := range ingress.Spec.Rules {
 			if rule.Host == host {
-				return c.applyPolicyToIngress(ctx, &ingress, policy)
+                return c.applyPolicyToIngress(ctx, &ingress, policy)
 			}
 		}
 	}
 	
 	// If no exact match found, try to create a new ingress for the host
-	return c.createIngressForHost(ctx, host, policy)
+    return c.createIngressForHost(ctx, namespace, host, policy)
 }
 
 func (c *Client) applyPolicyToIngress(ctx context.Context, ingress *networkingv1.Ingress, policy models.WAFPolicy) error {
@@ -195,43 +195,50 @@ func (c *Client) applyPolicyToIngress(ctx context.Context, ingress *networkingv1
 	return c.UpdateIngress(ctx, ingress.Namespace, ingress)
 }
 
-func (c *Client) createIngressForHost(ctx context.Context, host string, policy models.WAFPolicy) error {
-	// Check if a service exists that we can use as backend
-	services, err := c.clientset.CoreV1().Services("default").List(ctx, metav1.ListOptions{})
+func (c *Client) createIngressForHost(ctx context.Context, namespace string, host string, policy models.WAFPolicy) error {
+    services, err := c.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list services: %w", err)
 	}
 	
 	// Find a suitable backend service
-	backendService := "echo-server" // Default to echo-server if available
-	backendPort := int32(80)
-	
-	for _, svc := range services.Items {
-		if svc.Name == "echo-server" {
-			backendService = "echo-server"
-			if len(svc.Spec.Ports) > 0 {
-				backendPort = svc.Spec.Ports[0].Port
-			}
-			break
-		} else if svc.Name == "ingress-nginx-defaultbackend" {
-			backendService = "ingress-nginx-defaultbackend"
-			if len(svc.Spec.Ports) > 0 {
-				backendPort = svc.Spec.Ports[0].Port
-			}
-			break
-		}
-	}
+    backendService := ""
+    backendPort := int32(80)
+    
+    if len(c.config.Kubernetes.DefaultBackendServices) > 0 {
+        for _, candidate := range c.config.Kubernetes.DefaultBackendServices {
+            for _, svc := range services.Items {
+                if svc.Name == candidate {
+                    backendService = candidate
+                    if len(svc.Spec.Ports) > 0 {
+                        backendPort = svc.Spec.Ports[0].Port
+                    }
+                    break
+                }
+            }
+            if backendService != "" {
+                break
+            }
+        }
+    }
+    
+    if backendService == "" && len(services.Items) > 0 {
+        backendService = services.Items[0].Name
+        if len(services.Items[0].Spec.Ports) > 0 {
+            backendPort = services.Items[0].Spec.Ports[0].Port
+        }
+    }
 	
 	// Create a new ingress for the host
 	ingress := &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("waf-%s", strings.ReplaceAll(host, ".", "-")),
-			Namespace: "default",
-			Annotations: map[string]string{
-				"nginx.ingress.kubernetes.io/rewrite-target": "/",
-				"description": fmt.Sprintf("Auto-generated by WAF for host %s", host),
-			},
-		},
+        ObjectMeta: metav1.ObjectMeta{
+            Name:      fmt.Sprintf("waf-%s", strings.ReplaceAll(host, ".", "-")),
+            Namespace: namespace,
+            Annotations: map[string]string{
+                "nginx.ingress.kubernetes.io/rewrite-target": "/",
+                "description": fmt.Sprintf("Auto-generated by WAF for host %s", host),
+            },
+        },
 		Spec: networkingv1.IngressSpec{
 			Rules: []networkingv1.IngressRule{
 				{
@@ -263,7 +270,7 @@ func (c *Client) createIngressForHost(ctx context.Context, host string, policy m
 	}
 	
 	// Create the ingress first
-	createdIngress, err := c.clientset.NetworkingV1().Ingresses(ingress.Namespace).Create(ctx, ingress, metav1.CreateOptions{})
+    createdIngress, err := c.clientset.NetworkingV1().Ingresses(ingress.Namespace).Create(ctx, ingress, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create ingress for host %s: %w", host, err)
 	}
@@ -327,7 +334,7 @@ func (c *Client) ApplyWAFPolicyToController(ctx context.Context, policy models.W
 	snippet := c.generateControllerModSecuritySnippet(policy)
 	configMap.Data["modsecurity-snippet"] = snippet
 
-	return c.UpdateConfigMap(ctx, "ingress-nginx", configMap)
+    return c.UpdateConfigMap(ctx, c.config.Kubernetes.IngressControllerNamespace, configMap)
 }
 
 func (c *Client) generateControllerModSecuritySnippet(policy models.WAFPolicy) string {

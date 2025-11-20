@@ -6,16 +6,17 @@ import (
 
 // WAFPolicy represents a WAF policy for a specific host or globally
 type WAFPolicy struct {
-	ID          string                 `json:"id" yaml:"id"`
-	Host        string                 `json:"host" yaml:"host"`
-	Mode        string                 `json:"mode" yaml:"mode"` // On, DetectionOnly, Off
-	EnableCRS   bool                   `json:"enable_crs" yaml:"enable_crs"`
-	Exceptions  WAFExceptions          `json:"exceptions" yaml:"exceptions"`
-	CustomRules []CustomRule           `json:"custom_rules" yaml:"custom_rules"`
-	CreatedAt   time.Time              `json:"created_at" yaml:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at" yaml:"updated_at"`
-	UpdatedBy   string                 `json:"updated_by" yaml:"updated_by"`
-	Version     int                    `json:"version" yaml:"version"`
+    ID          string                 `json:"id" yaml:"id"`
+    Host        string                 `json:"host" yaml:"host"`
+    Namespace   string                 `json:"namespace" yaml:"namespace"`
+    Mode        string                 `json:"mode" yaml:"mode"` // On, DetectionOnly, Off
+    EnableCRS   bool                   `json:"enable_crs" yaml:"enable_crs"`
+    Exceptions  WAFExceptions          `json:"exceptions" yaml:"exceptions"`
+    CustomRules []CustomRule           `json:"custom_rules" yaml:"custom_rules"`
+    CreatedAt   time.Time              `json:"created_at" yaml:"created_at"`
+    UpdatedAt   time.Time              `json:"updated_at" yaml:"updated_at"`
+    UpdatedBy   string                 `json:"updated_by" yaml:"updated_by"`
+    Version     int                    `json:"version" yaml:"version"`
 }
 
 // WAFExceptions defines exception rules for WAF
@@ -171,28 +172,32 @@ const (
 
 // PolicyUpdateRequest represents a policy update request
 type PolicyUpdateRequest struct {
-	Host        string        `json:"host" binding:"required"`
-	Mode        string        `json:"mode" binding:"required,oneof=On DetectionOnly Off"`
-	EnableCRS   *bool         `json:"enable_crs,omitempty"`
-	Exceptions  *WAFExceptions `json:"exceptions,omitempty"`
-	CustomRules []CustomRule  `json:"custom_rules,omitempty"`
+    Host        string        `json:"host" binding:"required"`
+    Mode        string        `json:"mode" binding:"required,oneof=On DetectionOnly Off"`
+    Namespace   string        `json:"namespace"`
+    EnableCRS   *bool         `json:"enable_crs,omitempty"`
+    Exceptions  *WAFExceptions `json:"exceptions,omitempty"`
+    CustomRules []CustomRule  `json:"custom_rules,omitempty"`
 }
 
 // ExceptionUpdateRequest represents an exception update request
 type ExceptionUpdateRequest struct {
-	Host       string        `json:"host" binding:"required"`
-	Exceptions WAFExceptions `json:"exceptions" binding:"required"`
-	TestMode   bool          `json:"test_mode"`
+    Host       string        `json:"host" binding:"required"`
+    Namespace  string        `json:"namespace"`
+    Exceptions WAFExceptions `json:"exceptions" binding:"required"`
+    TestMode   bool          `json:"test_mode"`
 }
 
 // RuleUpdateRequest represents a rule update request
 type RuleUpdateRequest struct {
-	Host       string       `json:"host" binding:"required"`
-	CustomRules []CustomRule `json:"custom_rules" binding:"required"`
+    Host       string       `json:"host" binding:"required"`
+    Namespace  string       `json:"namespace"`
+    CustomRules []CustomRule `json:"custom_rules" binding:"required"`
 }
 
 // ApplyRequest represents a configuration apply request
 type ApplyRequest struct {
-	Host     string `json:"host" binding:"required"`
-	Strategy string `json:"strategy" binding:"required,oneof=annotation configmap"`
+    Host     string `json:"host" binding:"required"`
+    Namespace string `json:"namespace"`
+    Strategy string `json:"strategy" binding:"required,oneof=annotation configmap"`
 }
