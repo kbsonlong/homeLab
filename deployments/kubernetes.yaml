@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: waf-admin
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: waf-admin
+  namespace: waf-admin
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: waf-admin
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "services"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: waf-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: waf-admin
+subjects:
+- kind: ServiceAccount
+  name: waf-admin
+  namespace: waf-admin
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waf-admin-config
+  namespace: waf-admin
+data:
+  config.yaml: |
+    server:
+      port: 8080
+      host: "0.0.0.0"
+      mode: "production"
+      allow_origins:
+        - "*"
+    
+    kubernetes:
+      namespace: "waf-admin"
+      service_account: "waf-admin"
+    
+    metrics:
+      victoria_metrics_url: "http://victoria-metrics.monitoring.svc.cluster.local:8428"
+      vmalert_url: "http://vmalert.monitoring.svc.cluster.local:8880"
+    
+    logs:
+      victoria_logs_url: "http://victoria-logs.monitoring.svc.cluster.local:9428"
+    
+    security:
+      enable_auth: true
+      username: "admin"
+      password: "changeme"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: waf-policies
+  namespace: waf-admin
+data:
+  policies.yaml: "{}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf-admin-backend
+  namespace: waf-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: waf-admin-backend
+  template:
+    metadata:
+      labels:
+        app: waf-admin-backend
+    spec:
+      serviceAccountName: waf-admin
+      containers:
+      - name: waf-admin
+        image: waf-admin:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: config
+          mountPath: /etc/waf-admin
+          readOnly: true
+        env:
+        - name: WAF_SERVER_MODE
+          value: "production"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: waf-admin-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waf-admin-backend
+  namespace: waf-admin
+spec:
+  selector:
+    app: waf-admin-backend
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf-admin-frontend
+  namespace: waf-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: waf-admin-frontend
+  template:
+    metadata:
+      labels:
+        app: waf-admin-frontend
+    spec:
+      containers:
+      - name: waf-admin-frontend
+        image: waf-admin-frontend:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waf-admin-frontend
+  namespace: waf-admin
+spec:
+  selector:
+    app: waf-admin-frontend
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: waf-admin
+  namespace: waf-admin
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: waf-admin.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: waf-admin-frontend
+            port:
+              number: 80
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: waf-admin-backend
+            port:
+              number: 8080

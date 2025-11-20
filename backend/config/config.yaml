@@ -1,0 +1,22 @@
+server:
+  host: "0.0.0.0"
+  port: 3001
+  mode: "development"
+
+kubernetes:
+  namespace: "default"
+  config_path: "/Users/zengshenglong/.kube/config"
+  in_cluster: false
+
+metrics:
+  enabled: true
+  victoria_metrics_url: "http://localhost:8428"
+
+logs:
+  enabled: true
+  victoria_logs_url: "http://localhost:9428"
+
+security:
+  enable_auth: false
+  username: "admin"
+  password: "admin123"

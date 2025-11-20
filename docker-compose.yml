@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  waf-admin-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - WAF_SERVER_MODE=development
+      - WAF_KUBERNETES_NAMESPACE=monitoring
+      - WAF_METRICS_VICTORIA_METRICS_URL=http://victoria-metrics:8428
+      - WAF_METRICS_VMALERT_URL=http://vmalert:8880
+      - WAF_LOGS_VICTORIA_LOGS_URL=http://victoria-logs:9428
+      - WAF_SECURITY_ENABLE_AUTH=false
+    volumes:
+      - ./backend/config:/etc/waf-admin
+      - ~/.kube/config:/root/.kube/config:ro
+    networks:
+      - waf-admin
+    depends_on:
+      - victoria-metrics
+      - victoria-logs
+      - vmalert
+
+  waf-admin-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    environment:
+      - REACT_APP_API_URL=http://waf-admin-backend:8080
+    networks:
+      - waf-admin
+    depends_on:
+      - waf-admin-backend
+
+  # Mock services for development
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics:latest
+    ports:
+      - "8428:8428"
+    command:
+      - "-retentionPeriod=30d"
+      - "-httpListenAddr=:8428"
+    networks:
+      - waf-admin
+
+  victoria-logs:
+    image: victoriametrics/victoria-logs:latest
+    ports:
+      - "9428:9428"
+    command:
+      - "-retentionPeriod=30d"
+      - "-httpListenAddr=:9428"
+    networks:
+      - waf-admin
+
+  vmalert:
+    image: victoriametrics/vmalert:latest
+    ports:
+      - "8880:8880"
+    command:
+      - "-datasource.url=http://victoria-metrics:8428"
+      - "-notifier.url="
+      - "-httpListenAddr=:8880"
+      - "-rule=/etc/alerts/*.yaml"
+    volumes:
+      - ./deployments/alerts:/etc/alerts
+    networks:
+      - waf-admin
+    depends_on:
+      - victoria-metrics
+
+networks:
+  waf-admin:
+    driver: bridge

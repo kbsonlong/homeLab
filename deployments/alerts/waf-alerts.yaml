@@ -1,0 +1,48 @@
+groups:
+  - name: waf-alerts
+    rules:
+      - alert: HighWAFBlockRate
+        expr: |
+          (sum(rate(nginx_ingress_controller_requests{status="403"}[5m])) by (host) / 
+          sum(rate(nginx_ingress_controller_requests[5m])) by (host)) * 100 > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High WAF block rate detected"
+          description: "WAF block rate is {{ $value }}% for host {{ $labels.host }}"
+      
+      - alert: HighIngress5xxRate
+        expr: |
+          (sum(rate(nginx_ingress_controller_requests{status=~"5.."}[5m])) by (host) / 
+          sum(rate(nginx_ingress_controller_requests[5m])) by (host)) * 100 > 5
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High 5xx error rate detected"
+          description: "5xx error rate is {{ $value }}% for host {{ $labels.host }}"
+      
+      - alert: HighRequestRateFromSingleIP
+        expr: |
+          sum(rate(nginx_ingress_controller_requests[1m])) by (remote_addr) > 100
+        for: 2m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High request rate from single IP"
+          description: "IP {{ $labels.remote_addr }} is making {{ $value }} requests per second"
+      
+      - alert: WAFServiceDown
+        expr: |
+          up{job="waf-admin"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "WAF admin service is down"
+          description: "WAF admin service has been down for more than 1 minute"
